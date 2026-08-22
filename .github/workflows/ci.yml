@@ -1,0 +1,69 @@
+name: CI - Build, Scan, and Update GitOps Repo
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      # WHAT: gets the repo code onto the runner
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # WHAT: sets up Python so we can run tests before building
+      # WHY: fail fast — never build/push a broken app
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest
+
+      - name: Set image tag
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }} .
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }}
+          severity: CRITICAL
+          exit-code: "1"
+
+      - name: Push image to GHCR
+        run: |
+          docker push ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }}
+
+      - name: Update GitOps repository
+        env:
+          GITOPS_REPO_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
+        run: |
+          git clone https://x-access-token:${GITOPS_REPO_TOKEN}@github.com/${{ github.repository_owner }}/gitops-k8s-config.git
+          cd gitops-k8s-config
+          sed -i "s|tag: .*|tag: ${{ steps.vars.outputs.sha_short }}|" environments/dev/values-dev.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add environments/dev/values-dev.yaml
+          git commit -m "Update dev image tag to ${{ steps.vars.outputs.sha_short }}"
+          git push
