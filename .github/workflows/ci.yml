@@ -11,6 +11,7 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+
     steps:
       # WHAT: gets the repo code onto the runner
       - name: Checkout code
@@ -29,10 +30,13 @@ jobs:
       - name: Run tests
         run: pytest
 
+      # WHAT: derives a short commit SHA to use as the image tag
+      # WHY: unique, traceable tags per build
       - name: Set image tag
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Login to GitHub Container Registry
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -40,30 +44,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build Docker image
       - name: Build Docker image
         run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }} .
+          docker build \
+            -t ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }} .
 
+      # Scan image for CRITICAL vulnerabilities
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }}
           severity: CRITICAL
           exit-code: "1"
 
+      # Push image to GHCR only if previous steps succeed
       - name: Push image to GHCR
         run: |
           docker push ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }}
 
+      # Update GitOps repository with the new image tag
       - name: Update GitOps repository
         env:
           GITOPS_REPO_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
         run: |
           git clone https://x-access-token:${GITOPS_REPO_TOKEN}@github.com/${{ github.repository_owner }}/gitops-k8s-config.git
+
           cd gitops-k8s-config
+
           sed -i "s|tag: .*|tag: ${{ steps.vars.outputs.sha_short }}|" environments/dev/values-dev.yaml
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git add environments/dev/values-dev.yaml
+
           git commit -m "Update dev image tag to ${{ steps.vars.outputs.sha_short }}"
+
           git push
