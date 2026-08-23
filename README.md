@@ -178,3 +178,5 @@ curl http://localhost:8000/health
 ## GitOps Configuration Repository
 
 This repo builds and publishes an image; it does not decide what runs in the cluster. For the Helm chart, ArgoCD `Application`, environment values, architecture diagram, and deployment/rollback evidence, see [`gitops-k8s-config`](https://github.com/aniket-devop/gitops-k8s-config).
+
+<!-- concurrency test 1 -->
