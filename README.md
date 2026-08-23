@@ -67,7 +67,7 @@ The application logic is intentionally minimal — the focus of this project is 
 
 ## CI Pipeline
 
-![CI Pipeline Diagram](images/ci-pipeline-diagram.png)
+![CI Pipeline Diagram](screenshots/ci-pipeline-diagram.png)
 
 On every push to `main`, `.github/workflows/ci.yml` runs:
 
@@ -136,9 +136,9 @@ gitops-demo-app/
 - The image tag committed to `gitops-k8s-config`'s `environments/dev/values-dev.yaml` matches this repo's corresponding commit SHA
 - Full deployment reconciliation — ArgoCD picking up that commit and syncing the cluster — is evidenced separately in `gitops-k8s-config`, since this repo has no visibility into the cluster itself
 
-![CI Pipeline Result](images/ci-run-summary.png)
+![CI Pipeline Result](screenshots/ci-pipeline-result.png)
 
-![CI Pipeline Evidence](images/ci-run-evidence.png)
+![CI Pipeline Evidence](screenshots/ci-pipeline-evidence.png)
 
 A real GitHub Actions run for this workflow — every step, from test through Trivy scan, GHCR push, and the GitOps repo update, completing successfully.
 
