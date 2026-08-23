@@ -50,6 +50,28 @@ jobs:
           docker build \
             -t ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }} .
 
+      # WHAT: starts the built image and confirms it actually serves traffic
+      # WHY: pytest validates code in-process; this validates the real artifact
+      - name: Smoke test built image
+        run: |
+          docker run -d --name smoke-test -p 8000:8000 \
+            ghcr.io/${{ github.repository_owner }}/gitops-demo:${{ steps.vars.outputs.sha_short }}
+
+          echo "Waiting for container to become healthy..."
+          for i in $(seq 1 10); do
+            if curl -sf http://localhost:8000/health; then
+              echo "Smoke test passed"
+              docker stop smoke-test
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Smoke test FAILED - container did not become healthy"
+          docker logs smoke-test
+          docker stop smoke-test
+          exit 1
+
       # Scan image for CRITICAL vulnerabilities
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
