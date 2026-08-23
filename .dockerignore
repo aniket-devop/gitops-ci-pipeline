@@ -2,4 +2,12 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
-.git/ 
+.git/
+
+tests/
+README.md
+screenshots/
+Dockerfile
+.dockerignore
+.github/
+.gitignore
