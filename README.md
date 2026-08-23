@@ -149,7 +149,7 @@ Deployment behavior, ArgoCD sync status, and rollback evidence are validated and
 - CI updates only the `dev` environment's image tag; `staging` exists in `gitops-k8s-config` but is not part of the automated promotion path
 - This repository does not deploy to Kubernetes under any circumstance — deployment is entirely ArgoCD's responsibility, in the other repo
 - No image signing or SAST/dependency scanning beyond the Trivy CRITICAL image scan
-- No PR-based checks — the pipeline runs on push to `main`, not on pull requests
+- PR checks (`pr-checks.yml`) run `pytest` only — the Docker build, Trivy scan, and GHCR push happen only on push to `main`, not on pull requests
 - This is a local Kind cluster demonstration, not a production or cloud Kubernetes deployment
 
 ## Running Locally
