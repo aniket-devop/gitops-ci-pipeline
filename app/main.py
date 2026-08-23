@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 
 @app.get("/health")
 def health():
@@ -10,7 +10,7 @@ def health():
 
 @app.get("/version")
 def version():
-    return {"version": APP_VERSION, "message": "Hello from GitOps demo app v1"}
+    return {"version": APP_VERSION, "message": "Hello from GitOps demo app v2 - UPDATED"}
 
 @app.get("/")
 def root():
