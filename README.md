@@ -6,7 +6,7 @@ A FastAPI application and its CI pipeline — one half of a two-repository GitOp
 
 I designed, built, and validated this application repository and its CI pipeline end-to-end, including the cross-repository handoff into the GitOps configuration repo. This repo owns the application code and the build/test/scan/publish pipeline. It never touches a Kubernetes cluster.
 
-**GitOps configuration repository:** [`gitops-k8s-config`](https://github.com/aniket-devop/gitops-k8s-config) — Helm chart, environment values, and the ArgoCD `Application` that deploys this app to a Kind cluster. Architecture diagrams, ArgoCD screenshots, and rollback evidence live there.
+**GitOps configuration repository:** [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) — Helm chart, environment values, and the ArgoCD `Application` that deploys this app to a Kind cluster. Architecture diagrams, ArgoCD screenshots, and rollback evidence live there.
 
 **At a glance**
 
@@ -14,19 +14,19 @@ I designed, built, and validated this application repository and its CI pipeline
 |---|---|
 | What I built | A FastAPI app and a GitHub Actions CI pipeline that tests, scans, and publishes it |
 | What I own | Application code, tests, Dockerfile, and the full CI workflow, including the handoff into the GitOps repo |
-| Where CI stops | A Git commit to `gitops-k8s-config` — no cluster access from this repo, ever |
+| Where CI stops | A Git commit to `gitops-kubernetes-config` — no cluster access from this repo, ever |
 
 ## Key Architecture Boundary
 
 ```
 Developer → gitops-demo-app → GitHub Actions → pytest → Docker build
-   → Trivy CRITICAL scan → GHCR → Git commit to gitops-k8s-config
+   → Trivy CRITICAL scan → GHCR → Git commit to gitops-kubernetes-config
    → ArgoCD → Kind Kubernetes
 ```
 
 **CI builds and publishes. Git records desired state. ArgoCD deploys and reconciles.**
 
-**CI does not directly deploy to Kubernetes.** This repo's workflow stops at a Git commit to `gitops-k8s-config`. No `kubectl`, no Helm CLI, and no cluster credentials exist anywhere in this repo or its workflow. ArgoCD, running independently in the other repo's domain, is the only component with cluster access.
+**CI does not directly deploy to Kubernetes.** This repo's workflow stops at a Git commit to `gitops-kubernetes-config`. No `kubectl`, no Helm CLI, and no cluster credentials exist anywhere in this repo or its workflow. ArgoCD, running independently in the other repo's domain, is the only component with cluster access.
 
 ## Technology Stack
 
@@ -47,7 +47,7 @@ Developer → gitops-demo-app → GitHub Actions → pytest → Docker build
 | Repo | Owns | Role |
 |---|---|---|
 | `gitops-demo-app` (this repo) | FastAPI source, tests, Dockerfile, CI workflow | Builds, tests, scans, and publishes a container image |
-| [`gitops-k8s-config`](https://github.com/aniket-devop/gitops-k8s-config) | Helm chart, environment values, ArgoCD `Application` | Desired cluster state — watched and reconciled by ArgoCD |
+| [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) | Helm chart, environment values, ArgoCD `Application` | Desired cluster state — watched and reconciled by ArgoCD |
 
 **Why split the repos:** it keeps cluster credentials out of the application codebase entirely. This repo's CI can build, test, scan, and publish an image, but has no way to change what's running in the cluster — that's a separate, auditable step owned by a different repo and a different credential (`GITOPS_REPO_TOKEN`).
 
@@ -63,7 +63,7 @@ A minimal FastAPI service with three endpoints:
 
 The application logic is intentionally minimal — the focus of this project is the pipeline and the repo boundary around it, not the business logic of the service itself. `tests/test_main.py` covers all three endpoints with status codes and response bodies; `pytest` runs as the first gate in CI, so a broken commit never gets containerized or scanned.
 
-`/health` backs the liveness and readiness probes configured on the deployment side (see `gitops-k8s-config`); `/version` makes it possible to confirm, from outside the cluster, exactly which build is currently running.
+`/health` backs the liveness and readiness probes configured on the deployment side (see `gitops-kubernetes-config`); `/version` makes it possible to confirm, from outside the cluster, exactly which build is currently running.
 
 ## CI Pipeline
 
@@ -73,7 +73,7 @@ On every push to `main`, `.github/workflows/ci.yml` runs:
 
 ```
 checkout → pytest → derive commit-SHA image tag → docker build
-   → Trivy CRITICAL scan → push to GHCR → update dev tag in gitops-k8s-config
+   → Trivy CRITICAL scan → push to GHCR → update dev tag in gitops-kubernetes-config
 ```
 
 | Step | Action | Failure behavior |
@@ -84,9 +84,9 @@ checkout → pytest → derive commit-SHA image tag → docker build
 | 4 | Build the Docker image | — |
 | 5 | Scan with Trivy (`severity: CRITICAL`, `exit-code: "1"`) | CRITICAL finding fails the job before the image reaches GHCR |
 | 6 | Push to GHCR (`ghcr.io/aniket-devop/gitops-demo`) | Only reached if the scan passes |
-| 7 | Clone `gitops-k8s-config` with `GITOPS_REPO_TOKEN`, update `environments/dev/values-dev.yaml`, commit as `github-actions[bot]`, push | — |
+| 7 | Clone `gitops-kubernetes-config` with `GITOPS_REPO_TOKEN`, update `environments/dev/values-dev.yaml`, commit as `github-actions[bot]`, push | — |
 
-Step 7 is a plain Git commit to another repository — nothing more. ArgoCD picks up that change on its own watch cycle; reconciliation itself is documented in the [`gitops-k8s-config` README](https://github.com/aniket-devop/gitops-k8s-config).
+Step 7 is a plain Git commit to another repository — nothing more. ArgoCD picks up that change on its own watch cycle; reconciliation itself is documented in the [`gitops-kubernetes-config` README](https://github.com/aniket-devop/gitops-kubernetes-config).
 
 **Why commit-SHA tags:** every published image maps back to an exact source commit — no ambiguous `latest` tag.
 
@@ -98,14 +98,14 @@ Step 7 is a plain Git commit to another repository — nothing more. ArgoCD pick
 
 **Why CI stops at Git:** the workflow's last step is a commit, not a deploy — cluster access is deliberately kept out of this repo and its credentials.
 
-**Why ArgoCD owns deployment:** a single component with cluster credentials, running its own reconciliation loop, is a smaller and more auditable attack surface than letting every CI run authenticate against the cluster directly. That tradeoff is made explicit in [`gitops-k8s-config`](https://github.com/aniket-devop/gitops-k8s-config), where ArgoCD's sync policy lives.
+**Why ArgoCD owns deployment:** a single component with cluster credentials, running its own reconciliation loop, is a smaller and more auditable attack surface than letting every CI run authenticate against the cluster directly. That tradeoff is made explicit in [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config), where ArgoCD's sync policy lives.
 
 ## Security
 
 - **Non-root container** — the Dockerfile creates and switches to an unprivileged user (`adduser -D appuser && chown -R appuser:appuser /app`, `USER appuser`) before the app runs
 - **Minimal base image** — `python:3.12-alpine`
 - **Trivy CRITICAL gate** — hard-fails (`exit-code: "1"`) before any image reaches GHCR
-- **Separated credentials** — GHCR auth uses `GITHUB_TOKEN`; the cross-repo commit to `gitops-k8s-config` uses a distinct, separately scoped `GITOPS_REPO_TOKEN`
+- **Separated credentials** — GHCR auth uses `GITHUB_TOKEN`; the cross-repo commit to `gitops-kubernetes-config` uses a distinct, separately scoped `GITOPS_REPO_TOKEN`
 
 Not implemented in this repo: image signing, SAST or dependency scanning beyond the Trivy image scan, and branch-protection or PR-gated checks ahead of `main`.
 
@@ -133,8 +133,8 @@ gitops-demo-app/
 
 - CI workflow (`.github/workflows/ci.yml`) enforces test → scan → push, in that order, with the scan step able to block the push on a CRITICAL finding
 - Published image tags in GHCR are short commit SHAs, directly traceable to commits in this repo
-- The image tag committed to `gitops-k8s-config`'s `environments/dev/values-dev.yaml` matches this repo's corresponding commit SHA
-- Full deployment reconciliation — ArgoCD picking up that commit and syncing the cluster — is evidenced separately in `gitops-k8s-config`, since this repo has no visibility into the cluster itself
+- The image tag committed to `gitops-kubernetes-config`'s `environments/dev/values-dev.yaml` matches this repo's corresponding commit SHA
+- Full deployment reconciliation — ArgoCD picking up that commit and syncing the cluster — is evidenced separately in `gitops-kubernetes-config`, since this repo has no visibility into the cluster itself
 
 ![CI Pipeline Result](screenshots/ci-pipeline-result.png)
 
@@ -142,11 +142,11 @@ gitops-demo-app/
 
 A real GitHub Actions run for this workflow — every step, from test through Trivy scan, GHCR push, and the GitOps repo update, completing successfully.
 
-Deployment behavior, ArgoCD sync status, and rollback evidence are validated and documented in [`gitops-k8s-config`](https://github.com/aniket-devop/gitops-k8s-config) — not duplicated here.
+Deployment behavior, ArgoCD sync status, and rollback evidence are validated and documented in [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) — not duplicated here.
 
 ## Limitations
 
-- CI updates only the `dev` environment's image tag; `staging` exists in `gitops-k8s-config` but is not part of the automated promotion path
+- CI updates only the `dev` environment's image tag; `staging` exists in `gitops-kubernetes-config` but is not part of the automated promotion path
 - This repository does not deploy to Kubernetes under any circumstance — deployment is entirely ArgoCD's responsibility, in the other repo
 - No image signing or SAST/dependency scanning beyond the Trivy CRITICAL image scan
 - PR checks (`pr-checks.yml`) run `pytest` only — the Docker build, Trivy scan, and GHCR push happen only on push to `main`, not on pull requests
@@ -177,8 +177,9 @@ curl http://localhost:8000/health
 
 ## GitOps Configuration Repository
 
-This repo builds and publishes an image; it does not decide what runs in the cluster. For the Helm chart, ArgoCD `Application`, environment values, architecture diagram, and deployment/rollback evidence, see [`gitops-k8s-config`](https://github.com/aniket-devop/gitops-k8s-config).
+This repo builds and publishes an image; it does not decide what runs in the cluster. For the Helm chart, ArgoCD `Application`, environment values, architecture diagram, and deployment/rollback evidence, see [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config).
 
 <!-- concurrency test 1 -->
 
 <!-- concurrency test 2 -->
+

@@ -94,9 +94,9 @@ jobs:
         env:
           GITOPS_REPO_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
         run: |
-          git clone https://x-access-token:${GITOPS_REPO_TOKEN}@github.com/${{ github.repository_owner }}/gitops-k8s-config.git
+          git clone https://x-access-token:${GITOPS_REPO_TOKEN}@github.com/${{ github.repository_owner }}/gitops-kubernetes-config.git
 
-          cd gitops-k8s-config
+          cd gitops-kubernetes-config
 
           sed -i "s|tag: .*|tag: ${{ steps.vars.outputs.sha_short }}|" environments/dev/values-dev.yaml
 
