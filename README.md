@@ -1,4 +1,4 @@
-# gitops-demo-app
+# gitops-ci-pipeline
 
 A FastAPI application and its CI pipeline — one half of a two-repository GitOps CI/CD demonstration.
 
@@ -19,7 +19,7 @@ I designed, built, and validated this application repository and its CI pipeline
 ## Key Architecture Boundary
 
 ```
-Developer → gitops-demo-app → GitHub Actions → pytest → Docker build
+Developer → gitops-ci-pipeline → GitHub Actions → pytest → Docker build
    → Trivy CRITICAL scan → GHCR → Git commit to gitops-kubernetes-config
    → ArgoCD → Kind Kubernetes
 ```
@@ -46,7 +46,7 @@ Developer → gitops-demo-app → GitHub Actions → pytest → Docker build
 
 | Repo | Owns | Role |
 |---|---|---|
-| `gitops-demo-app` (this repo) | FastAPI source, tests, Dockerfile, CI workflow | Builds, tests, scans, and publishes a container image |
+| `gitops-ci-pipeline` (this repo) | FastAPI source, tests, Dockerfile, CI workflow | Builds, tests, scans, and publishes a container image |
 | [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) | Helm chart, environment values, ArgoCD `Application` | Desired cluster state — watched and reconciled by ArgoCD |
 
 **Why split the repos:** it keeps cluster credentials out of the application codebase entirely. This repo's CI can build, test, scan, and publish an image, but has no way to change what's running in the cluster — that's a separate, auditable step owned by a different repo and a different credential (`GITOPS_REPO_TOKEN`).
@@ -59,7 +59,7 @@ A minimal FastAPI service with three endpoints:
 |---|---|---|
 | `GET /health` | Liveness/readiness check | `{"status": "ok"}` |
 | `GET /version` | Current app version | `{"version": "2.0.0", "message": "..."}` |
-| `GET /` | Service status | `{"service": "gitops-demo-app", "status": "running"}` |
+| `GET /` | Service status | `{"service": "gitops-ci-pipeline", "status": "running"}` |
 
 The application logic is intentionally minimal — the focus of this project is the pipeline and the repo boundary around it, not the business logic of the service itself. `tests/test_main.py` covers all three endpoints with status codes and response bodies; `pytest` runs as the first gate in CI, so a broken commit never gets containerized or scanned.
 
@@ -118,7 +118,7 @@ Not implemented in this repo: image signing, SAST or dependency scanning beyond 
 ## Repository Structure
 
 ```
-gitops-demo-app/
+gitops-ci-pipeline/
 ├── .github/workflows/     # ci.yml — the pipeline described above
 ├── app/                   # FastAPI source
 ├── tests/                 # pytest suite covering all three endpoints
@@ -182,4 +182,3 @@ This repo builds and publishes an image; it does not decide what runs in the clu
 <!-- concurrency test 1 -->
 
 <!-- concurrency test 2 -->
-
