@@ -122,7 +122,7 @@ gitops-demo-app/
 ├── .github/workflows/     # ci.yml — the pipeline described above
 ├── app/                   # FastAPI source
 ├── tests/                 # pytest suite covering all three endpoints
-├── images/                # CI pipeline diagram and run evidence
+├── screenshots/           # CI pipeline diagram and run evidence
 ├── Dockerfile
 ├── requirements.txt
 ├── .dockerignore
