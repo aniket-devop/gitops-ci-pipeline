@@ -92,7 +92,7 @@ jobs:
       # Update GitOps repository with the new image tag
       - name: Update GitOps repository
         env:
-          GITOPS_REPO_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
+          GITOPS_REPO_TOKEN: ${{ secrets.GITOPS_TOKEN_V2 }}
         run: |
           git clone https://x-access-token:${GITOPS_REPO_TOKEN}@github.com/${{ github.repository_owner }}/gitops-kubernetes-config.git
 
