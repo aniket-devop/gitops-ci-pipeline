@@ -9,7 +9,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 # --- OpenTelemetry setup ---
 resource = Resource.create({"service.name": "gitops-demo-app"})
 provider = TracerProvider(resource=resource)
-otlp_exporter = OTLPSpanExporter(endpoint="http://jaeger.observability.svc.cluster.local:4318/v1/traces")
+otlp_exporter = OTLPSpanExporter(endpoint="http://otel-collector.observability.svc.cluster.local:4318/v1/traces")
 provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
 trace.set_tracer_provider(provider)
 
