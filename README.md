@@ -65,6 +65,31 @@ The application logic is intentionally minimal — the focus of this project is 
 
 `/health` backs the liveness and readiness probes configured on the deployment side (see `gitops-kubernetes-config`); `/version` makes it possible to confirm, from outside the cluster, exactly which build is currently running.
 
+## OpenTelemetry Tracing
+
+Every request is automatically traced using `FastAPIInstrumentor` — no manual span code per route. Each request produces a parent `SERVER` span plus child spans for the ASGI response lifecycle, tagged with `http.route`, `http.status_code`, `http.method`, and `service.name: gitops-demo-app`. Traces are exported over OTLP/HTTP to Jaeger, running in the cluster this repo's images are deployed to.
+
+```python
+resource = Resource.create({"service.name": "gitops-demo-app"})
+provider = TracerProvider(resource=resource)
+otlp_exporter = OTLPSpanExporter(endpoint="http://jaeger.observability.svc.cluster.local:4318/v1/traces")
+provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+trace.set_tracer_provider(provider)
+
+app = FastAPI()
+FastAPIInstrumentor.instrument_app(app)
+```
+
+**Two engineering decisions worth calling out:**
+
+**OTLP/HTTP exporter, not OTLP/gRPC.** The container is `python:3.12-alpine`. `grpcio` — a dependency of the gRPC exporter — has no `musllinux` wheel, which would force a slow source compile on every build. The HTTP exporter (`opentelemetry-exporter-otlp-proto-http`) is pure Python, so it installs cleanly on Alpine. Verified before adopting it: `pip download grpcio --platform musllinux_1_2_x86_64` returns no matching distribution for the target Python/architecture combination.
+
+**`SimpleSpanProcessor` for local debugging, `BatchSpanProcessor` for the network exporter.** Traces were first sent to the console using `SimpleSpanProcessor` — synchronous, no background thread — while confirming instrumentation worked correctly. Once the exporter switched to sending data over the network to Jaeger, so did the processor, to `BatchSpanProcessor`, which batches and exports asynchronously rather than blocking each request on network I/O. Using `BatchSpanProcessor` with a console exporter was tried first and discarded — it raised `I/O operation on closed file` errors under `pytest`, because its background flush thread outlives the test session's captured stdout.
+
+**Why cluster DNS, not `localhost`:** the OTLP endpoint is `jaeger.observability.svc.cluster.local:4318` — the app and Jaeger run in separate Pods, so `localhost` would only ever resolve to the app's own Pod, never to Jaeger.
+
+Trace evidence — the service list, individual traces, and a span waterfall — is documented in [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config), alongside the Jaeger and Prometheus deployment itself.
+
 ## CI Pipeline
 
 ![CI Pipeline Diagram](screenshots/ci-pipeline-diagram.png)
