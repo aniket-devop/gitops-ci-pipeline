@@ -59,7 +59,7 @@ A minimal FastAPI service with three endpoints:
 |---|---|---|
 | `GET /health` | Liveness/readiness check | `{"status": "ok"}` |
 | `GET /version` | Current app version | `{"version": "2.0.0", "message": "..."}` |
-| `GET /` | Service status | `{"service": "gitops-ci-pipeline", "status": "running"}` |
+| `GET /` | Service status | `{"service": "gitops-demo-app", "status": "running"}` |
 
 The application logic is intentionally minimal — the focus of this project is the pipeline and the repo boundary around it, not the business logic of the service itself. `tests/test_main.py` covers all three endpoints with status codes and response bodies; `pytest` runs as the first gate in CI, so a broken commit never gets containerized or scanned.
 
@@ -203,7 +203,3 @@ curl http://localhost:8000/health
 ## GitOps Configuration Repository
 
 This repo builds and publishes an image; it does not decide what runs in the cluster. For the Helm chart, ArgoCD `Application`, environment values, architecture diagram, and deployment/rollback evidence, see [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config).
-
-<!-- concurrency test 1 -->
-
-<!-- concurrency test 2 -->
