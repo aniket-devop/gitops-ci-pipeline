@@ -1,15 +1,43 @@
-# gitops-ci-pipeline
+<h1 align="center">gitops-ci-pipeline</h1>
 
-**CI/CD and GitOps delivery of a FastAPI service to Kubernetes**, built as a hands-on DevOps portfolio project. **GitHub Actions** tests, scans and publishes a container image, then commits the new image tag to a separate config repository. **Argo CD** reconciles that repository onto a local **Kind** cluster, where traces, metrics and alerts are collected end to end.
+<p align="center">
+  <b>CI/CD and GitOps delivery of a FastAPI service to Kubernetes, with tracing, metrics and alerting.</b><br>
+  A hands-on DevOps portfolio project: GitHub Actions builds, tests, scans and publishes. Argo CD deploys.
+</p>
+
+<p align="center">
+  <a href="https://github.com/aniket-devop/gitops-ci-pipeline/actions/workflows/ci.yml"><img src="https://github.com/aniket-devop/gitops-ci-pipeline/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white" alt="GitHub Actions">
+  <img src="https://img.shields.io/badge/Argo_CD-GitOps-EF7B4D?logo=argo&logoColor=white" alt="Argo CD">
+  <img src="https://img.shields.io/badge/Kubernetes-Kind-326CE5?logo=kubernetes&logoColor=white" alt="Kubernetes (Kind)">
+  <img src="https://img.shields.io/badge/Helm-chart-0F1689?logo=helm&logoColor=white" alt="Helm">
+  <img src="https://img.shields.io/badge/Docker-Alpine-2496ED?logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/FastAPI-Python_3.12-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/OpenTelemetry-tracing-425CC7?logo=opentelemetry&logoColor=white" alt="OpenTelemetry">
+  <img src="https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white" alt="Prometheus">
+  <img src="https://img.shields.io/badge/Grafana-dashboards-F46800?logo=grafana&logoColor=white" alt="Grafana">
+</p>
+
+```text
+Code  →  Test  →  Build  →  Smoke test  →  Scan  →  Publish  →  Git commit  →  Argo CD  →  Kubernetes  →  Observe
+```
 
 > **Scope:** a personal project running on a local Kind cluster. It is not a production or cloud deployment, and it makes no uptime, scale or performance claims.
 
-The project spans two repositories:
+## Contents
 
-| Repository | Role |
+[At a Glance](#at-a-glance) · [Why I Built This](#why-i-built-this) · [Architecture](#architecture) · [End-to-End Workflow](#end-to-end-workflow) · [CI Pipeline](#ci-pipeline) · [GitOps / CD](#gitops--cd) · [Kubernetes](#kubernetes) · [Security](#security) · [Observability](#observability) · [Rollback](#rollback) · [Repository Structure](#repository-structure) · [Tech Stack](#tech-stack) · [How to Run](#how-to-run) · [What This Project Demonstrates](#what-this-project-demonstrates) · [Limitations](#limitations) · [Project Highlights](#project-highlights)
+
+## At a Glance
+
+| | |
 |---|---|
-| **`gitops-ci-pipeline`** (this repo) | FastAPI app, Dockerfile, tests, and the GitHub Actions workflows. It builds and publishes the image and has no cluster access. |
-| [**`gitops-kubernetes-config`**](https://github.com/aniket-devop/gitops-kubernetes-config) | Helm chart, per-environment values, Argo CD `Application`s and observability manifests. It holds the desired cluster state that Argo CD reconciles. |
+| **What it is** | A two-repository GitOps pipeline: app and CI here, desired cluster state in [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) |
+| **CI gates** | pytest, container smoke test, Trivy scan (fails on CRITICAL), all before the image is pushed |
+| **Deployment** | Argo CD with automated sync, `prune` and `selfHeal`. CI never touches the cluster |
+| **Rollback** | `git revert` of an image-tag commit, using the same path as a deployment |
+| **Observability** | OpenTelemetry Collector, Jaeger, Prometheus, Grafana, Alertmanager and Slack, all deployed through Argo CD |
+| **Runs on** | Local Kind cluster |
 
 ## Why I Built This
 
@@ -21,47 +49,31 @@ Many CD setups let CI run `kubectl apply` directly, which puts cluster credentia
 
 I then added tracing, metrics and alerting so the deployed service could be observed, not just deployed.
 
+### Where to look first
+
+| If you want to see | Open |
+|---|---|
+| The full CI pipeline | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| The hardened container image | [`Dockerfile`](Dockerfile) |
+| Argo CD sync policy | [`argocd/application.yaml`](https://github.com/aniket-devop/gitops-kubernetes-config/blob/main/argocd/application.yaml) |
+| Deployment, probes, security context | [`helm/gitops-demo/templates/deployment.yaml`](https://github.com/aniket-devop/gitops-kubernetes-config/blob/main/helm/gitops-demo/templates/deployment.yaml) |
+| Alert rules and Prometheus config | [`observability/prometheus.yaml`](https://github.com/aniket-devop/gitops-kubernetes-config/blob/main/observability/prometheus.yaml) |
+| Span-derived RED metrics | [`observability/otel-collector.yaml`](https://github.com/aniket-devop/gitops-kubernetes-config/blob/main/observability/otel-collector.yaml) |
+
+The project spans two repositories:
+
+| Repository | Role |
+|---|---|
+| **`gitops-ci-pipeline`** (this repo) | FastAPI app, Dockerfile, tests, and the GitHub Actions workflows. It builds and publishes the image and has no cluster access. |
+| [**`gitops-kubernetes-config`**](https://github.com/aniket-devop/gitops-kubernetes-config) | Helm chart, per-environment values, Argo CD `Application`s and observability manifests. It holds the desired cluster state that Argo CD reconciles. |
+
 ## Architecture
+
+![GitOps CI/CD with distributed tracing: architecture](screenshots/architecture-diagram.png)
 
 ### CI to GitOps handoff
 
 ![GitOps CI/CD: Application Build & GitOps Handoff](screenshots/ci-pipeline-diagram.png)
-
-### Delivery flow (end to end)
-
-```mermaid
-flowchart LR
-    Dev([Developer]) -->|push to main| GHA
-
-    subgraph APP["gitops-ci-pipeline (app repo)"]
-        GHA["GitHub Actions"] --> T["pytest"] --> B["Docker build"] --> SM["Smoke test /health"] --> TR["Trivy scan: fail on CRITICAL"]
-    end
-
-    TR -->|pass| GHCR[("GHCR image tagged with short SHA")]
-    TR -->|pass: commit new tag| CFG
-
-    subgraph CFGR["gitops-kubernetes-config (config repo)"]
-        CFG["environments/dev/values-dev.yaml"]
-        HELM["Helm chart + observability manifests"]
-    end
-
-    CFG --> ARGO["Argo CD: automated sync, prune, selfHeal"]
-    HELM --> ARGO
-    ARGO -->|reconciles| K8S["Kind cluster"]
-    GHCR -.->|image pull| K8S
-```
-
-### Observability flow
-
-```mermaid
-flowchart LR
-    APP["FastAPI app: OpenTelemetry SDK, OTLP/HTTP"] --> COL["OpenTelemetry Collector"]
-    COL -->|traces| J["Jaeger"]
-    COL -->|spanmetrics: RED metrics| P["Prometheus"]
-    P --> G["Grafana RED dashboard"]
-    J -.->|Monitor tab queries| P
-    P -->|alert rules| AM["Alertmanager"] --> S["Slack"]
-```
 
 ## End-to-End Workflow
 
@@ -166,14 +178,14 @@ Not implemented: progressive delivery (canary or blue/green) or automatic rollba
 
 This repo:
 
-```
+```text
 gitops-ci-pipeline/
 ├── .github/workflows/
 │   ├── ci.yml            # test, build, smoke test, scan, push, GitOps update
 │   └── pr-checks.yml     # pytest on pull requests
 ├── app/main.py           # FastAPI app + OpenTelemetry setup
 ├── tests/test_main.py    # endpoint tests
-├── screenshots/          # CI diagram and run evidence
+├── screenshots/          # architecture diagrams and CI run evidence
 ├── Dockerfile            # python:3.12-alpine, non-root
 ├── requirements.txt      # pinned dependencies
 └── .dockerignore
@@ -181,7 +193,7 @@ gitops-ci-pipeline/
 
 [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config):
 
-```
+```text
 gitops-kubernetes-config/
 ├── argocd/               # Applications: dev, staging, observability
 ├── helm/gitops-demo/     # Chart: Deployment, Service, base values
@@ -228,6 +240,9 @@ docker run -p 8000:8000 gitops-demo
 
 ### Full GitOps stack
 
+<details>
+<summary><b>Show steps</b></summary>
+
 Prerequisites: Docker, [Kind](https://kind.sigs.k8s.io/), `kubectl`, and Argo CD installed in the cluster. Kind cluster creation and the Argo CD installation are not part of either repo.
 
 ```bash
@@ -254,6 +269,8 @@ Argo CD then deploys the app to `gitops-demo-dev` and the monitoring stack to `o
 To see CI drive a deployment end to end, push a commit to `main` here and watch the tag change in `values-dev.yaml` and Argo CD sync it.
 
 To run your own copy, you must fork both repos and update the hard-coded `aniket-devop` references in the Argo CD manifests. You must also add a repository secret named `GITOPS_TOKEN_V2` containing a token with write access to the config repo.
+
+</details>
 
 ## What This Project Demonstrates
 
