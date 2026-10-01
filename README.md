@@ -1,205 +1,286 @@
 # gitops-ci-pipeline
 
-A FastAPI application and its CI pipeline — one half of a two-repository GitOps CI/CD demonstration.
+**CI/CD and GitOps delivery of a FastAPI service to Kubernetes**, built as a hands-on DevOps portfolio project. **GitHub Actions** tests, scans and publishes a container image, then commits the new image tag to a separate config repository. **Argo CD** reconciles that repository onto a local **Kind** cluster, where traces, metrics and alerts are collected end to end.
 
-## Hands-On Ownership
+> **Scope:** a personal project running on a local Kind cluster. It is not a production or cloud deployment, and it makes no uptime, scale or performance claims.
 
-I designed, built, and validated this application repository and its CI pipeline end-to-end, including the cross-repository handoff into the GitOps configuration repo. This repo owns the application code and the build/test/scan/publish pipeline. It never touches a Kubernetes cluster.
+The project spans two repositories:
 
-**GitOps configuration repository:** [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) — Helm chart, environment values, and the ArgoCD `Application` that deploys this app to a Kind cluster. Architecture diagrams, ArgoCD screenshots, and rollback evidence live there.
-
-**At a glance**
-
-| | |
+| Repository | Role |
 |---|---|
-| What I built | A FastAPI app and a GitHub Actions CI pipeline that tests, scans, and publishes it |
-| What I own | Application code, tests, Dockerfile, and the full CI workflow, including the handoff into the GitOps repo |
-| Where CI stops | A Git commit to `gitops-kubernetes-config` — no cluster access from this repo, ever |
+| **`gitops-ci-pipeline`** (this repo) | FastAPI app, Dockerfile, tests, and the GitHub Actions workflows. It builds and publishes the image and has no cluster access. |
+| [**`gitops-kubernetes-config`**](https://github.com/aniket-devop/gitops-kubernetes-config) | Helm chart, per-environment values, Argo CD `Application`s and observability manifests. It holds the desired cluster state that Argo CD reconciles. |
 
-## Key Architecture Boundary
+## Why I Built This
 
-```
-Developer → gitops-ci-pipeline → GitHub Actions → pytest → Docker build
-   → Trivy CRITICAL scan → GHCR → Git commit to gitops-kubernetes-config
-   → ArgoCD → Kind Kubernetes
-```
+Many CD setups let CI run `kubectl apply` directly, which puts cluster credentials inside the pipeline and leaves no single record of what should be running. I wanted to build the alternative myself:
 
-**CI builds and publishes. Git records desired state. ArgoCD deploys and reconciles.**
+- **CI builds and publishes.** It never touches the cluster.
+- **Git records desired state.** Deployments and rollbacks are both Git commits.
+- **Argo CD is the only component that deploys.** It reconciles the cluster against Git.
 
-**CI does not directly deploy to Kubernetes.** This repo's workflow stops at a Git commit to `gitops-kubernetes-config`. No `kubectl`, no Helm CLI, and no cluster credentials exist anywhere in this repo or its workflow. ArgoCD, running independently in the other repo's domain, is the only component with cluster access.
+I then added tracing, metrics and alerting so the deployed service could be observed, not just deployed.
 
-## Technology Stack
+## Architecture
 
-| Layer | Technology |
-|---|---|
-| Application | FastAPI, Python 3.12 |
-| Testing | pytest, `fastapi.testclient.TestClient` |
-| Container | Docker, `python:3.12-alpine`, non-root `appuser` |
-| CI | GitHub Actions |
-| Security scanning | Trivy (CRITICAL severity gate) |
-| Registry | GitHub Container Registry (GHCR) |
-| Deployment (other repo) | Helm, ArgoCD, Kind |
+### CI to GitOps handoff
 
-**Pinned dependencies** (`requirements.txt`): `fastapi==0.115.0`, `uvicorn[standard]==0.30.6`, `pytest==8.3.3`, `httpx==0.27.2`
+![GitOps CI/CD: Application Build & GitOps Handoff](screenshots/ci-pipeline-diagram.png)
 
-## Two-Repository Architecture
+### Delivery flow (end to end)
 
-| Repo | Owns | Role |
-|---|---|---|
-| `gitops-ci-pipeline` (this repo) | FastAPI source, tests, Dockerfile, CI workflow | Builds, tests, scans, and publishes a container image |
-| [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) | Helm chart, environment values, ArgoCD `Application` | Desired cluster state — watched and reconciled by ArgoCD |
+```mermaid
+flowchart LR
+    Dev([Developer]) -->|push to main| GHA
 
-**Why split the repos:** it keeps cluster credentials out of the application codebase entirely. This repo's CI can build, test, scan, and publish an image, but has no way to change what's running in the cluster — that's a separate, auditable step owned by a different repo and a different credential (`GITOPS_REPO_TOKEN`).
+    subgraph APP["gitops-ci-pipeline (app repo)"]
+        GHA["GitHub Actions"] --> T["pytest"] --> B["Docker build"] --> SM["Smoke test /health"] --> TR["Trivy scan: fail on CRITICAL"]
+    end
 
-## What This App Does
+    TR -->|pass| GHCR[("GHCR image tagged with short SHA")]
+    TR -->|pass: commit new tag| CFG
 
-A minimal FastAPI service with three endpoints:
+    subgraph CFGR["gitops-kubernetes-config (config repo)"]
+        CFG["environments/dev/values-dev.yaml"]
+        HELM["Helm chart + observability manifests"]
+    end
 
-| Endpoint | Purpose | Example response |
-|---|---|---|
-| `GET /health` | Liveness/readiness check | `{"status": "ok"}` |
-| `GET /version` | Current app version | `{"version": "2.0.0", "message": "..."}` |
-| `GET /` | Service status | `{"service": "gitops-demo-app", "status": "running"}` |
-
-The application logic is intentionally minimal — the focus of this project is the pipeline and the repo boundary around it, not the business logic of the service itself. `tests/test_main.py` covers all three endpoints with status codes and response bodies; `pytest` runs as the first gate in CI, so a broken commit never gets containerized or scanned.
-
-`/health` backs the liveness and readiness probes configured on the deployment side (see `gitops-kubernetes-config`); `/version` makes it possible to confirm, from outside the cluster, exactly which build is currently running.
-
-## OpenTelemetry Tracing
-
-Every request is automatically traced using `FastAPIInstrumentor` — no manual span code per route. Each request produces a parent `SERVER` span plus child spans for the ASGI response lifecycle, tagged with `http.route`, `http.status_code`, `http.method`, and `service.name: gitops-demo-app`. Traces are exported over OTLP/HTTP to Jaeger, running in the cluster this repo's images are deployed to.
-
-```python
-resource = Resource.create({"service.name": "gitops-demo-app"})
-provider = TracerProvider(resource=resource)
-otlp_exporter = OTLPSpanExporter(endpoint="http://jaeger.observability.svc.cluster.local:4318/v1/traces")
-provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-trace.set_tracer_provider(provider)
-
-app = FastAPI()
-FastAPIInstrumentor.instrument_app(app)
+    CFG --> ARGO["Argo CD: automated sync, prune, selfHeal"]
+    HELM --> ARGO
+    ARGO -->|reconciles| K8S["Kind cluster"]
+    GHCR -.->|image pull| K8S
 ```
 
-**Two engineering decisions worth calling out:**
+### Observability flow
 
-**OTLP/HTTP exporter, not OTLP/gRPC.** The container is `python:3.12-alpine`. `grpcio` — a dependency of the gRPC exporter — has no `musllinux` wheel, which would force a slow source compile on every build. The HTTP exporter (`opentelemetry-exporter-otlp-proto-http`) is pure Python, so it installs cleanly on Alpine. Verified before adopting it: `pip download grpcio --platform musllinux_1_2_x86_64` returns no matching distribution for the target Python/architecture combination.
+```mermaid
+flowchart LR
+    APP["FastAPI app: OpenTelemetry SDK, OTLP/HTTP"] --> COL["OpenTelemetry Collector"]
+    COL -->|traces| J["Jaeger"]
+    COL -->|spanmetrics: RED metrics| P["Prometheus"]
+    P --> G["Grafana RED dashboard"]
+    J -.->|Monitor tab queries| P
+    P -->|alert rules| AM["Alertmanager"] --> S["Slack"]
+```
 
-**`SimpleSpanProcessor` for local debugging, `BatchSpanProcessor` for the network exporter.** Traces were first sent to the console using `SimpleSpanProcessor` — synchronous, no background thread — while confirming instrumentation worked correctly. Once the exporter switched to sending data over the network to Jaeger, so did the processor, to `BatchSpanProcessor`, which batches and exports asynchronously rather than blocking each request on network I/O. Using `BatchSpanProcessor` with a console exporter was tried first and discarded — it raised `I/O operation on closed file` errors under `pytest`, because its background flush thread outlives the test session's captured stdout.
+## End-to-End Workflow
 
-**Why cluster DNS, not `localhost`:** the OTLP endpoint is `jaeger.observability.svc.cluster.local:4318` — the app and Jaeger run in separate Pods, so `localhost` would only ever resolve to the app's own Pod, never to Jaeger.
-
-Trace evidence — the service list, individual traces, and a span waterfall — is documented in [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config), alongside the Jaeger and Prometheus deployment itself.
+1. A commit is pushed to `main` in this repo.
+2. `ci.yml` runs the tests, builds the image, smoke-tests the running container, and scans it with Trivy.
+3. If everything passes, the image is pushed to **GHCR** as `ghcr.io/aniket-devop/gitops-demo:<short-commit-SHA>`.
+4. The workflow clones `gitops-kubernetes-config`, updates the image tag in `environments/dev/values-dev.yaml`, and pushes the commit as `github-actions[bot]`. **The pipeline stops here.**
+5. Argo CD's `gitops-demo-dev` Application detects the change, renders the Helm chart with the dev values, and syncs the `gitops-demo-dev` namespace.
+6. Kubernetes pulls the new image tag from GHCR and rolls out the Deployment.
+7. The app emits traces to the OpenTelemetry Collector. The Collector feeds Jaeger and derives request, error and latency metrics for Prometheus, Grafana and alerting.
 
 ## CI Pipeline
 
-![CI Pipeline Diagram](screenshots/ci-pipeline-diagram.png)
+Defined in `.github/workflows/ci.yml`, triggered on push to `main`:
 
-On every push to `main`, `.github/workflows/ci.yml` runs:
-
-```
-checkout → pytest → derive commit-SHA image tag → docker build
-   → Trivy CRITICAL scan → push to GHCR → update dev tag in gitops-kubernetes-config
-```
-
-| Step | Action | Failure behavior |
+| Stage | What it does | Why it exists |
 |---|---|---|
-| 1 | Checkout, set up Python 3.12, install `requirements.txt` | — |
-| 2 | Run `pytest` | Failing test blocks everything downstream |
-| 3 | Derive image tag from short commit SHA | Every published image traces back to an exact commit |
-| 4 | Build the Docker image | — |
-| 5 | Scan with Trivy (`severity: CRITICAL`, `exit-code: "1"`) | CRITICAL finding fails the job before the image reaches GHCR |
-| 6 | Push to GHCR (`ghcr.io/aniket-devop/gitops-demo`) | Only reached if the scan passes |
-| 7 | Clone `gitops-kubernetes-config` with `GITOPS_REPO_TOKEN`, update `environments/dev/values-dev.yaml`, commit as `github-actions[bot]`, push | — |
+| Install + **pytest** | Runs 3 tests covering `/health`, `/version` and `/` | Fail fast: a broken commit is never built |
+| Image tag | Short commit SHA via `git rev-parse --short HEAD` | Every image maps to an exact commit; no `latest` |
+| Docker build | Builds from `python:3.12-alpine` | Produces the artifact that will be deployed |
+| **Smoke test** | Runs the built container and polls `/health` (10 tries, 2s apart) | pytest tests code in-process; this checks the real image actually serves traffic |
+| **Trivy scan** | `severity: CRITICAL`, `exit-code: "1"` | A CRITICAL finding fails the job before the image reaches the registry |
+| Push to GHCR | `docker push` of the SHA-tagged image | Only reached if all earlier stages pass |
+| GitOps update | `sed` the tag in `values-dev.yaml`, commit, push to the config repo | Hands the new version to the GitOps layer without touching the cluster |
 
-Step 7 is a plain Git commit to another repository — nothing more. ArgoCD picks up that change on its own watch cycle; reconciliation itself is documented in the [`gitops-kubernetes-config` README](https://github.com/aniket-devop/gitops-kubernetes-config).
+Other pipeline details:
 
-**Why commit-SHA tags:** every published image maps back to an exact source commit — no ambiguous `latest` tag.
+- **Concurrency control:** the `ci-${{ github.ref }}` group with `cancel-in-progress: false` serializes runs, so two runs don't push to the config repo at the same time.
+- **Least-privilege permissions:** `contents: read` and `packages: write` only.
+- **Pull requests:** `pr-checks.yml` runs `pytest` only, with read-only permissions and no secrets. Build, scan, push and GitOps update run only on `main`.
 
-**Why GHCR:** already authenticated through the existing `GITHUB_TOKEN`, so there's no separate registry account to manage.
+![CI pipeline run](screenshots/ci-pipeline-result.png)
 
-**Why Trivy is a hard gate:** a single Action step (`exit-code: "1"`) that fails the job outright on a CRITICAL finding, rather than producing an informational report someone has to act on later.
+![CI pipeline run evidence](screenshots/ci-pipeline-evidence.png)
 
-**Why CRITICAL-only gating:** it stops anything severe from reaching GHCR without blocking the pipeline on HIGH/MEDIUM findings that don't represent immediate risk — a deliberate tradeoff for this project's scope, not a claim that lower severities don't matter.
+## GitOps / CD
 
-**Why CI stops at Git:** the workflow's last step is a commit, not a deploy — cluster access is deliberately kept out of this repo and its credentials.
+The config repo holds everything Argo CD manages. Three `Application` manifests live in `argocd/`:
 
-**Why ArgoCD owns deployment:** a single component with cluster credentials, running its own reconciliation loop, is a smaller and more auditable attack surface than letting every CI run authenticate against the cluster directly. That tradeoff is made explicit in [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config), where ArgoCD's sync policy lives.
+| Application | Source path | Sync policy |
+|---|---|---|
+| `gitops-demo-dev` | `helm/gitops-demo` + `environments/dev/values-dev.yaml` | **Automated**, `prune: true`, `selfHeal: true` |
+| `observability` | `observability/` (plain manifests) | **Automated**, `prune: true`, `selfHeal: true` |
+| `gitops-demo-staging` | `helm/gitops-demo` + `environments/staging/values-staging.yaml` | Manual sync (not automated) |
+
+- **Deployment on Git change:** committing a new tag to `values-dev.yaml` is the only action needed to deploy.
+- **Drift correction:** with `selfHeal`, manual cluster changes are reverted to match Git. I tested this by running `kubectl scale ... --replicas=5` on the dev Deployment and watching the extra Pods terminate back to the Git-defined count (screenshot in the config repo).
+- **Separate observability Application:** it reconciles independently of the app.
+- **Staging:** it uses a static tag and has no promotion path from dev.
+
+## Kubernetes
+
+The Helm chart `gitops-demo` (chart `0.2.0`, appVersion `2.0.0`) renders a Deployment and a `ClusterIP` Service (port 80 → container port 8000).
+
+- **Replicas:** `dev` runs 1 replica and `staging` runs 2. The base chart default is 3, and environment files override only `replicaCount` and `image`.
+- **Probes:** liveness and readiness both check `/health`. Liveness starts after 5s and runs every 10s. Readiness starts after 3s and runs every 5s.
+- **Resources:** requests of `100m` CPU / `128Mi` memory, and limits of `250m` CPU / `256Mi` memory.
+- **Pod hardening:** `runAsNonRoot`, `allowPrivilegeEscalation: false`, all capabilities dropped, and `readOnlyRootFilesystem: true`.
+- **Image pulls:** no `imagePullSecrets` are configured. The GHCR package is public, as documented in the config repo.
 
 ## Security
 
-- **Non-root container** — the Dockerfile creates and switches to an unprivileged user (`adduser -D appuser && chown -R appuser:appuser /app`, `USER appuser`) before the app runs
-- **Minimal base image** — `python:3.12-alpine`
-- **Trivy CRITICAL gate** — hard-fails (`exit-code: "1"`) before any image reaches GHCR
-- **Separated credentials** — GHCR auth uses `GITHUB_TOKEN`; the cross-repo commit to `gitops-kubernetes-config` uses a distinct, separately scoped `GITOPS_REPO_TOKEN`
+| Where | Control |
+|---|---|
+| **CI** | Trivy image scan fails the build on CRITICAL findings, **before** the image is pushed. Workflow permissions are minimal, and the PR workflow has no secrets. |
+| **Image** | `python:3.12-alpine` base, numeric non-root user (UID 10001), and a `.dockerignore` that keeps tests, docs, screenshots and `.github/` out of the image. |
+| **Kubernetes** | Non-root, no privilege escalation, dropped capabilities, read-only root filesystem, and resource limits. |
+| **Credentials** | GHCR push uses `GITHUB_TOKEN`. The cross-repo commit uses a separate token stored as a repository secret. **CI holds no cluster credentials.** The Slack webhook is a Kubernetes `Secret` created out-of-band and never committed. |
+| **Deployment** | Argo CD `selfHeal` reverts undocumented manual changes. |
 
-Not implemented in this repo: image signing, SAST or dependency scanning beyond the Trivy image scan, and branch-protection or PR-gated checks ahead of `main`.
+**Not implemented:** image signing, SAST, dependency scanning beyond the Trivy image scan, NetworkPolicy, RBAC manifests, and a secrets manager.
 
-### Engineering Judgment
+## Observability
 
-- **Non-root by default:** running as `appuser` limits blast radius if the container is ever compromised — a small, cheap control relative to the risk it removes.
-- **Scan before push, not after:** Trivy runs against the built image before it ever reaches GHCR, so a CRITICAL finding is a build failure, not a published artifact that has to be pulled back.
-- **Two credentials, two blast radii:** `GITHUB_TOKEN` can push to GHCR; `GITOPS_REPO_TOKEN` can commit to the config repo. Neither can touch the cluster, and compromising one doesn't hand over the other.
+All components run in the `observability` namespace and are deployed through the `observability` Argo CD Application.
+
+- **Tracing:** the app uses the OpenTelemetry SDK with `FastAPIInstrumentor` (no manual spans) and exports **OTLP/HTTP** to the **OpenTelemetry Collector**. The Collector forwards traces to **Jaeger**.
+- **RED metrics:** the Collector's **`spanmetrics` connector** derives request rate, error rate and duration from spans, grouped by HTTP method and status code. **Prometheus** scrapes them from the Collector (`:8889`) and scrapes Jaeger's own metrics (`:14269`).
+- **Dashboards:** **Grafana** has its Prometheus datasource and a RED dashboard (request rate, error rate, p95 latency) provisioned from ConfigMaps, so nothing is configured by hand. Jaeger's Monitor tab reads the same Prometheus data.
+- **Alerting:** Prometheus evaluates three rules and sends firing alerts to **Alertmanager**, which routes them to **Slack**.
+
+| Alert | Condition |
+|---|---|
+| `HighErrorRate` | 5xx ratio above 5% for 2m |
+| `HighLatency` | p95 above 500 ms for 2m |
+| `ServiceUnavailable` | no request rate observed for 2m |
+
+I tested the path end to end by triggering `HighLatency` and confirming that the firing and resolved notifications arrived in Slack. Screenshots of traces, the Grafana dashboard, Prometheus targets and the Slack alert are in the [config repo](https://github.com/aniket-devop/gitops-kubernetes-config).
+
+## Rollback
+
+Rollback is a **Git revert**, using the same path as a deployment:
+
+- `57e6a90`: CI-generated commit setting the dev tag to `978b36d`.
+- `9f75968`: `git revert` of that commit, setting the tag back to `6d381aa`.
+
+With automated sync enabled, Argo CD picks up the revert and reconciles the cluster to the previous image. There is no separate rollback tool, and the rollback is recorded in Git history.
+
+Not implemented: progressive delivery (canary or blue/green) or automatic rollback on failed health checks.
 
 ## Repository Structure
 
+This repo:
+
 ```
 gitops-ci-pipeline/
-├── .github/workflows/     # ci.yml — the pipeline described above
-├── app/                   # FastAPI source
-├── tests/                 # pytest suite covering all three endpoints
-├── screenshots/           # CI pipeline diagram and run evidence
-├── Dockerfile
-├── requirements.txt
-├── .dockerignore
-└── .gitignore
+├── .github/workflows/
+│   ├── ci.yml            # test, build, smoke test, scan, push, GitOps update
+│   └── pr-checks.yml     # pytest on pull requests
+├── app/main.py           # FastAPI app + OpenTelemetry setup
+├── tests/test_main.py    # endpoint tests
+├── screenshots/          # CI diagram and run evidence
+├── Dockerfile            # python:3.12-alpine, non-root
+├── requirements.txt      # pinned dependencies
+└── .dockerignore
 ```
 
-## Validation / Evidence
+[`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config):
 
-- CI workflow (`.github/workflows/ci.yml`) enforces test → scan → push, in that order, with the scan step able to block the push on a CRITICAL finding
-- Published image tags in GHCR are short commit SHAs, directly traceable to commits in this repo
-- The image tag committed to `gitops-kubernetes-config`'s `environments/dev/values-dev.yaml` matches this repo's corresponding commit SHA
-- Full deployment reconciliation — ArgoCD picking up that commit and syncing the cluster — is evidenced separately in `gitops-kubernetes-config`, since this repo has no visibility into the cluster itself
+```
+gitops-kubernetes-config/
+├── argocd/               # Applications: dev, staging, observability
+├── helm/gitops-demo/     # Chart: Deployment, Service, base values
+├── environments/         # dev (CI-managed tag) and staging values
+├── observability/        # OTel Collector, Jaeger, Prometheus, Grafana, Alertmanager
+└── screenshots/          # Argo CD, tracing, dashboard and alert evidence
+```
 
-![CI Pipeline Result](screenshots/ci-pipeline-result.png)
+## Tech Stack
 
-![CI Pipeline Evidence](screenshots/ci-pipeline-evidence.png)
+| Category | Technologies |
+|---|---|
+| **Application** | Python 3.12, **FastAPI**, Uvicorn |
+| **Testing** | **pytest**, FastAPI `TestClient` (httpx) |
+| **CI/CD** | **GitHub Actions** |
+| **Containers** | **Docker**, `python:3.12-alpine`, **GHCR** |
+| **Security** | **Trivy** |
+| **GitOps** | **Argo CD**, **Helm** |
+| **Kubernetes** | **Kind** (local cluster) |
+| **Observability** | **OpenTelemetry** (SDK + Collector with `spanmetrics`), **Jaeger**, **Prometheus**, **Grafana**, **Alertmanager**, Slack |
 
-A real GitHub Actions run for this workflow — every step, from test through Trivy scan, GHCR push, and the GitOps repo update, completing successfully.
+## How to Run
 
-Deployment behavior, ArgoCD sync status, and rollback evidence are validated and documented in [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) — not duplicated here.
+### Application only
 
-## Limitations
-
-- CI updates only the `dev` environment's image tag; `staging` exists in `gitops-kubernetes-config` but is not part of the automated promotion path
-- This repository does not deploy to Kubernetes under any circumstance — deployment is entirely ArgoCD's responsibility, in the other repo
-- No image signing or SAST/dependency scanning beyond the Trivy CRITICAL image scan
-- PR checks (`pr-checks.yml`) run `pytest` only — the Docker build, Trivy scan, and GHCR push happen only on push to `main`, not on pull requests
-- This is a local Kind cluster demonstration, not a production or cloud Kubernetes deployment
-
-## Running Locally
-
-**Prerequisites:** Python 3.12, or Docker.
+Requires Python 3.12 or Docker.
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+pytest
+uvicorn app.main:app --port 8000
+curl http://localhost:8000/health    # {"status":"ok"}
+curl http://localhost:8000/version
 ```
 
-Or via Docker:
+Or with Docker:
 
 ```bash
 docker build -t gitops-demo .
 docker run -p 8000:8000 gitops-demo
 ```
 
-Verify it's up:
+> The OTLP endpoint is hard-coded to the in-cluster Collector address. Outside the cluster the app works normally, but the exporter logs DNS resolution errors for trace export.
+
+### Full GitOps stack
+
+Prerequisites: Docker, [Kind](https://kind.sigs.k8s.io/), `kubectl`, and Argo CD installed in the cluster. Kind cluster creation and the Argo CD installation are not part of either repo.
 
 ```bash
-curl http://localhost:8000/health
-# {"status": "ok"}
+git clone https://github.com/aniket-devop/gitops-kubernetes-config.git
+cd gitops-kubernetes-config
+
+# Slack webhook for Alertmanager (never committed; the Alertmanager Pod won't start without it)
+kubectl create namespace observability
+kubectl create secret generic slack-webhook -n observability --from-literal=url=<YOUR_SLACK_WEBHOOK_URL>
+
+kubectl apply -f argocd/application.yaml
+kubectl apply -f argocd/application-observability.yaml
 ```
 
-## GitOps Configuration Repository
+Argo CD then deploys the app to `gitops-demo-dev` and the monitoring stack to `observability`. Use `kubectl port-forward` to reach the UIs:
 
-This repo builds and publishes an image; it does not decide what runs in the cluster. For the Helm chart, ArgoCD `Application`, environment values, architecture diagram, and deployment/rollback evidence, see [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config).
+| Service | Namespace | Command |
+|---|---|---|
+| App | `gitops-demo-dev` | `svc/gitops-demo-svc 8080:80` |
+| Jaeger | `observability` | `svc/jaeger 16686:16686` |
+| Grafana | `observability` | `svc/grafana 3000:3000` |
+| Prometheus | `observability` | `svc/prometheus 9090:9090` |
+
+To see CI drive a deployment end to end, push a commit to `main` here and watch the tag change in `values-dev.yaml` and Argo CD sync it.
+
+To run your own copy, you must fork both repos and update the hard-coded `aniket-devop` references in the Argo CD manifests. You must also add a repository secret named `GITOPS_TOKEN_V2` containing a token with write access to the config repo.
+
+## What This Project Demonstrates
+
+- **CI/CD automation:** test, build, smoke test, scan, publish and GitOps handoff, with each gate able to stop the pipeline.
+- **GitOps deployment model:** Argo CD with automated sync, prune and selfHeal. CI never deploys, and cluster credentials stay out of the pipeline.
+- **Container security:** a scan-before-push gate and a non-root image, plus a hardened pod spec.
+- **Declarative configuration:** a Helm chart with per-environment values and everything stored in Git.
+- **Observability:** distributed tracing, span-derived RED metrics, a provisioned dashboard and Slack alerting.
+- **Operations:** Git-based rollback, drift correction, and troubleshooting recorded in the commit history.
+
+## Limitations
+
+- Runs on a **local Kind cluster** only.
+- Only `dev` is automated. Staging requires manual sync, uses a static tag, and has no promotion workflow.
+- Dev runs a single replica, and there is no HPA, Ingress/TLS, NetworkPolicy or RBAC.
+- The observability components are single-replica with no persistent storage configured.
+- Argo CD installation and the Slack secret are created out-of-band, not from Git.
+- The same `requirements.txt` serves tests and runtime, so test dependencies are in the image.
+- The PR workflow runs tests only, and the Trivy scan covers CRITICAL findings only.
+- Only the final image is scanned. There is no SAST, dependency scanning or image signing.
+
+## Project Highlights
+
+- **Two-repository GitOps boundary:** the CI pipeline has no cluster access; its only handoff is a Git commit.
+- **Gates before publish:** tests, a container smoke test, and a Trivy CRITICAL scan, all passing before the image is pushed.
+- **Traceable artifacts:** every image tag is a commit SHA, and every deployment or rollback is a Git commit.
+- **Rollback by `git revert`:** the same reconciliation path handles deploys and rollbacks.
+- **Drift correction:** Argo CD `selfHeal` reverted a manual `kubectl scale` back to the Git-defined state.
+- **Observability pipeline in Git:** OTel Collector `spanmetrics` feeds Prometheus, a provisioned Grafana dashboard and Alertmanager.
+- **Alerting tested end to end:** a deliberately triggered `HighLatency` alert reached Slack, including the resolved notification.
