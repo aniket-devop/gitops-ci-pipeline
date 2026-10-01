@@ -7,15 +7,11 @@
 
 <p align="center">
   <a href="https://github.com/aniket-devop/gitops-ci-pipeline/actions/workflows/ci.yml"><img src="https://github.com/aniket-devop/gitops-ci-pipeline/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white" alt="GitHub Actions">
   <img src="https://img.shields.io/badge/Argo_CD-GitOps-EF7B4D?logo=argo&logoColor=white" alt="Argo CD">
   <img src="https://img.shields.io/badge/Kubernetes-Kind-326CE5?logo=kubernetes&logoColor=white" alt="Kubernetes (Kind)">
-  <img src="https://img.shields.io/badge/Helm-chart-0F1689?logo=helm&logoColor=white" alt="Helm">
   <img src="https://img.shields.io/badge/Docker-Alpine-2496ED?logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/FastAPI-Python_3.12-009688?logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/OpenTelemetry-tracing-425CC7?logo=opentelemetry&logoColor=white" alt="OpenTelemetry">
-  <img src="https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white" alt="Prometheus">
-  <img src="https://img.shields.io/badge/Grafana-dashboards-F46800?logo=grafana&logoColor=white" alt="Grafana">
 </p>
 
 ```text
